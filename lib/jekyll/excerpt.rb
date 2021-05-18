@@ -1,4 +1,4 @@
-require 'forwardable'
+# frozen_string_literal: true
 
 module Jekyll
   class Excerpt
@@ -8,8 +8,13 @@ module Jekyll
     attr_accessor :content, :ext
     attr_writer   :output
 
-    def_delegators :@doc, :site, :name, :ext, :relative_path, :extname,
-                          :render_with_liquid?, :collection, :related_posts
+    def_delegators :@doc,
+                   :site, :name, :ext, :extname,
+                   :collection, :related_posts, :type,
+                   :coffeescript_file?, :yaml_file?,
+                   :url, :next_doc, :previous_doc
+
+    private :coffeescript_file?, :yaml_file?
 
     # Initialize this Excerpt instance.
     #
@@ -31,8 +36,7 @@ module Jekyll
       @data
     end
 
-    def trigger_hooks(*)
-    end
+    def trigger_hooks(*); end
 
     # 'Path' of the excerpt.
     #
@@ -41,11 +45,18 @@ module Jekyll
       File.join(doc.path, "#excerpt")
     end
 
+    # 'Relative Path' of the excerpt.
+    #
+    # Returns the relative_path for the doc this excerpt belongs to with #excerpt appended
+    def relative_path
+      @relative_path ||= File.join(doc.relative_path, "#excerpt")
+    end
+
     # Check if excerpt includes a string
     #
     # Returns true if the string passed in
     def include?(something)
-      (output && output.include?(something)) || content.include?(something)
+      output&.include?(something) || content.include?(something)
     end
 
     # The UID for this doc (useful in feeds).
@@ -61,15 +72,12 @@ module Jekyll
     end
 
     def to_liquid
-      doc.data['excerpt'] = nil
-      @to_liquid ||= doc.to_liquid
-      doc.data['excerpt'] = self
-      @to_liquid
+      Jekyll::Drops::ExcerptDrop.new(self)
     end
 
     # Returns the shorthand String identifier of this doc.
     def inspect
-      "<Excerpt: #{self.id}>"
+      "<#{self.class} id=#{id}>"
     end
 
     def output
@@ -78,6 +86,12 @@ module Jekyll
 
     def place_in_layout?
       false
+    end
+
+    def render_with_liquid?
+      return false if data["render_with_liquid"] == false
+
+      !(coffeescript_file? || yaml_file? || !Utils.has_liquid_construct?(content))
     end
 
     protected
@@ -116,14 +130,72 @@ module Jekyll
     # Excerpts are rendered same time as content is rendered.
     #
     # Returns excerpt String
+
+    LIQUID_TAG_REGEX = %r!{%-?\s*(\w+)\s*.*?-?%}!m.freeze
+    MKDWN_LINK_REF_REGEX = %r!^ {0,3}(?:(\[[^\]]+\])(:.+))$!.freeze
+
     def extract_excerpt(doc_content)
       head, _, tail = doc_content.to_s.partition(doc.excerpt_separator)
+      return head if tail.empty?
 
-      if tail.empty?
-        head
-      else
-        "" << head << "\n\n" << tail.scan(/^\[[^\]]+\]:.+$/).join("\n")
+      head = sanctify_liquid_tags(head) if head.include?("{%")
+      definitions = extract_markdown_link_reference_definitions(head, tail)
+      return head if definitions.empty?
+
+      head << "\n\n" << definitions.join("\n")
+    end
+
+    private
+
+    # append appropriate closing tag(s) (for each Liquid block), to the `head` if the
+    # partitioning resulted in leaving the closing tag somewhere in the `tail` partition.
+    def sanctify_liquid_tags(head)
+      modified  = false
+      tag_names = head.scan(LIQUID_TAG_REGEX)
+      tag_names.flatten!
+      tag_names.reverse_each do |tag_name|
+        next unless liquid_block?(tag_name)
+        next if endtag_regex_stash(tag_name).match?(head)
+
+        modified = true
+        head << "\n{% end#{tag_name} %}"
       end
+
+      print_build_warning if modified
+      head
+    end
+
+    def extract_markdown_link_reference_definitions(head, tail)
+      [].tap do |definitions|
+        tail.scan(MKDWN_LINK_REF_REGEX).each do |segments|
+          definitions << segments.join if head.include?(segments[0])
+        end
+      end
+    end
+
+    def endtag_regex_stash(tag_name)
+      @endtag_regex_stash ||= {}
+      @endtag_regex_stash[tag_name] ||= %r!{%-?\s*end#{tag_name}.*?\s*-?%}!m
+    end
+
+    def liquid_block?(tag_name)
+      return false unless tag_name.is_a?(String)
+      return false unless Liquid::Template.tags[tag_name]
+
+      Liquid::Template.tags[tag_name].ancestors.include?(Liquid::Block)
+    rescue NoMethodError
+      Jekyll.logger.error "Error:",
+                          "A Liquid tag in the excerpt of #{doc.relative_path} couldn't be parsed."
+      raise
+    end
+
+    def print_build_warning
+      Jekyll.logger.warn "Warning:", "Excerpt modified in #{doc.relative_path}!"
+      Jekyll.logger.warn "", "Found a Liquid block containing the excerpt separator" \
+                         " #{doc.excerpt_separator.inspect}. "
+      Jekyll.logger.warn "", "The block has been modified with the appropriate closing tag."
+      Jekyll.logger.warn "", "Feel free to define a custom excerpt or excerpt_separator in the"
+      Jekyll.logger.warn "", "document's Front Matter if the generated excerpt is unsatisfactory."
     end
   end
 end

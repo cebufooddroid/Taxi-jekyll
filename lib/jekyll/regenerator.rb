@@ -1,6 +1,10 @@
+# frozen_string_literal: true
+
 module Jekyll
   class Regenerator
     attr_reader :site, :metadata, :cache
+    attr_accessor :disabled
+    private :disabled, :disabled=
 
     def initialize(site)
       @site = site
@@ -16,20 +20,16 @@ module Jekyll
     #
     # Returns a boolean.
     def regenerate?(document)
+      return true if disabled
+
       case document
       when Page
-        document.asset_file? || document.data['regenerate'] ||
-          source_modified_or_dest_missing?(
-            site.in_source_dir(document.relative_path), document.destination(@site.dest)
-          )
+        regenerate_page?(document)
       when Document
-        !document.write? || document.data['regenerate'] ||
-          source_modified_or_dest_missing?(
-            document.path, document.destination(@site.dest)
-          )
+        regenerate_document?(document)
       else
-        source_path = document.respond_to?(:path)        ? document.path                    : nil
-        dest_path   = document.respond_to?(:destination) ? document.destination(@site.dest) : nil
+        source_path = document.respond_to?(:path) ? document.path : nil
+        dest_path = document.destination(@site.dest) if document.respond_to?(:destination)
         source_modified_or_dest_missing?(source_path, dest_path)
       end
     end
@@ -42,7 +42,7 @@ module Jekyll
 
       metadata[path] = {
         "mtime" => File.mtime(path),
-        "deps" => []
+        "deps"  => [],
       }
       cache[path] = true
     end
@@ -62,7 +62,6 @@ module Jekyll
       clear_cache
     end
 
-
     # Clear just the cache
     #
     # Returns nothing
@@ -70,13 +69,12 @@ module Jekyll
       @cache = {}
     end
 
-
     # Checks if the source has been modified or the
     # destination is missing
     #
     # returns a boolean
     def source_modified_or_dest_missing?(source_path, dest_path)
-      modified?(source_path) || (dest_path and !File.exist?(dest_path))
+      modified?(source_path) || (dest_path && !File.exist?(dest_path))
     end
 
     # Checks if a path's (or one of its dependencies)
@@ -90,36 +88,25 @@ module Jekyll
       return true if path.nil?
 
       # Check for path in cache
-      if cache.has_key? path
-        return cache[path]
-      end
+      return cache[path] if cache.key? path
 
-      # Check path that exists in metadata
-      data = metadata[path]
-      if data
-        data["deps"].each do |dependency|
-          if modified?(dependency)
-            return cache[dependency] = cache[path] = true
-          end
-        end
-        if File.exist?(path) && data["mtime"].eql?(File.mtime(path))
-          return cache[path] = false
-        else
-          return add(path)
-        end
+      if metadata[path]
+        # If we have seen this file before,
+        # check if it or one of its dependencies has been modified
+        existing_file_modified?(path)
+      else
+        # If we have not seen this file before, add it to the metadata and regenerate it
+        add(path)
       end
-
-      # Path does not exist in metadata, add it
-      return add(path)
     end
 
     # Add a dependency of a path
     #
     # Returns nothing.
     def add_dependency(path, dependency)
-      return if (metadata[path].nil? || @disabled)
+      return if metadata[path].nil? || disabled
 
-      if !metadata[path]["deps"].include? dependency
+      unless metadata[path]["deps"].include? dependency
         metadata[path]["deps"] << dependency
         add(dependency) unless metadata.include?(dependency)
       end
@@ -131,6 +118,7 @@ module Jekyll
     # Returns nothing.
     def write_metadata
       unless disabled?
+        Jekyll.logger.debug "Writing Metadata:", ".jekyll-metadata"
         File.binwrite(metadata_file, Marshal.dump(metadata))
       end
     end
@@ -139,15 +127,15 @@ module Jekyll
     #
     # Returns the String path of the file.
     def metadata_file
-      site.in_source_dir('.jekyll-metadata')
+      @metadata_file ||= site.in_source_dir(".jekyll-metadata")
     end
 
     # Check if metadata has been disabled
     #
     # Returns a Boolean (true for disabled, false for enabled).
     def disabled?
-      @disabled = !site.incremental? if @disabled.nil?
-      @disabled
+      self.disabled = !site.incremental? if disabled.nil?
+      disabled
     end
 
     private
@@ -157,19 +145,50 @@ module Jekyll
     #
     # Returns the read metadata.
     def read_metadata
-      @metadata = if !disabled? && File.file?(metadata_file)
-        content = File.binread(metadata_file)
+      @metadata =
+        if !disabled? && File.file?(metadata_file)
+          content = File.binread(metadata_file)
 
-        begin
-          Marshal.load(content)
-        rescue TypeError
-          SafeYAML.load(content)
-        rescue ArgumentError => e
-          Jekyll.logger.warn("Failed to load #{metadata_file}: #{e}")
+          begin
+            Marshal.load(content)
+          rescue TypeError
+            SafeYAML.load(content)
+          rescue ArgumentError => e
+            Jekyll.logger.warn("Failed to load #{metadata_file}: #{e}")
+            {}
+          end
+        else
           {}
         end
+    end
+
+    def regenerate_page?(document)
+      document.asset_file? || document.data["regenerate"] ||
+        source_modified_or_dest_missing?(
+          site.in_source_dir(document.relative_path), document.destination(@site.dest)
+        )
+    end
+
+    def regenerate_document?(document)
+      !document.write? || document.data["regenerate"] ||
+        source_modified_or_dest_missing?(
+          document.path, document.destination(@site.dest)
+        )
+    end
+
+    def existing_file_modified?(path)
+      # If one of this file dependencies have been modified,
+      # set the regeneration bit for both the dependency and the file to true
+      metadata[path]["deps"].each do |dependency|
+        return cache[dependency] = cache[path] = true if modified?(dependency)
+      end
+
+      if File.exist?(path) && metadata[path]["mtime"].eql?(File.mtime(path))
+        # If this file has not been modified, set the regeneration bit to false
+        cache[path] = false
       else
-        {}
+        # If it has been modified, set it to true
+        add(path)
       end
     end
   end

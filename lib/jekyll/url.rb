@@ -1,4 +1,4 @@
-require 'uri'
+# frozen_string_literal: true
 
 # Public: Methods that generate a URL for a resource such as a Post or a Page.
 #
@@ -11,7 +11,6 @@ require 'uri'
 #
 module Jekyll
   class URL
-
     # options - One of :permalink or :template must be supplied.
     #           :template     - The String used as template for URL generation,
     #                           for example "/:path/:basename:output_ext", where
@@ -59,22 +58,67 @@ module Jekyll
     #
     # Returns the unsanitized String URL
     def generate_url(template)
+      if @placeholders.is_a? Drops::UrlDrop
+        generate_url_from_drop(template)
+      else
+        generate_url_from_hash(template)
+      end
+    end
+
+    def generate_url_from_hash(template)
       @placeholders.inject(template) do |result, token|
-        break result if result.index(':').nil?
+        break result if result.index(":").nil?
+
         if token.last.nil?
-          # Remove leading '/' to avoid generating urls with `//`
-          result.gsub(/\/:#{token.first}/, '')
+          # Remove leading "/" to avoid generating urls with `//`
+          result.gsub("/:#{token.first}", "")
         else
-          result.gsub(/:#{token.first}/, self.class.escape_path(token.last))
+          result.gsub(":#{token.first}", self.class.escape_path(token.last))
         end
+      end
+    end
+
+    # We include underscores in keys to allow for 'i_month' and so forth.
+    # This poses a problem for keys which are followed by an underscore
+    # but the underscore is not part of the key, e.g. '/:month_:day'.
+    # That should be :month and :day, but our key extraction regexp isn't
+    # smart enough to know that so we have to make it an explicit
+    # possibility.
+    def possible_keys(key)
+      if key.end_with?("_")
+        [key, key.chomp("_")]
+      else
+        [key]
+      end
+    end
+
+    def generate_url_from_drop(template)
+      template.gsub(%r!:([a-z_]+)!) do |match|
+        name = Regexp.last_match(1)
+        pool = name.end_with?("_") ? [name, name.chomp!("_")] : [name]
+
+        winner = pool.find { |key| @placeholders.key?(key) }
+        if winner.nil?
+          raise NoMethodError,
+                "The URL template doesn't have #{pool.join(" or ")} keys. "\
+                "Check your permalink template!"
+        end
+
+        value = @placeholders[winner]
+        value = "" if value.nil?
+        replacement = self.class.escape_path(value)
+
+        match.sub!(":#{winner}", replacement)
       end
     end
 
     # Returns a sanitized String URL, stripping "../../" and multiples of "/",
     # as well as the beginning "/" so we can enforce and ensure it.
-
     def sanitize_url(str)
-      "/" + str.gsub(/\/{2,}/, "/").gsub(%r!\.+\/|\A/+!, "")
+      "/#{str}".gsub("..", "/").tap do |result|
+        result.gsub!("./", "")
+        result.squeeze!("/")
+      end
     end
 
     # Escapes a path to be a valid URL path segment
@@ -88,7 +132,9 @@ module Jekyll
     #
     # Returns the escaped path.
     def self.escape_path(path)
-      # Because URI.escape doesn't escape '?', '[' and ']' by default,
+      return path if path.empty? || %r!^[a-zA-Z0-9./-]+$!.match?(path)
+
+      # Because URI.escape doesn't escape "?", "[" and "]" by default,
       # specify unsafe string (except unreserved, sub-delims, ":", "@" and "/").
       #
       # URI path segment is defined in RFC 3986 as follows:
@@ -98,7 +144,7 @@ module Jekyll
       #   pct-encoded   = "%" HEXDIG HEXDIG
       #   sub-delims    = "!" / "$" / "&" / "'" / "(" / ")"
       #                 / "*" / "+" / "," / ";" / "="
-      URI.escape(path, /[^a-zA-Z\d\-._~!$&'()*+,;=:@\/]/).encode('utf-8')
+      Addressable::URI.encode(path).encode("utf-8").sub("#", "%23")
     end
 
     # Unescapes a URL path segment
@@ -112,7 +158,10 @@ module Jekyll
     #
     # Returns the unescaped path.
     def self.unescape_path(path)
-      URI.unescape(path.encode('utf-8'))
+      path = path.encode("utf-8")
+      return path unless path.include?("%")
+
+      Addressable::URI.unencode(path)
     end
   end
 end

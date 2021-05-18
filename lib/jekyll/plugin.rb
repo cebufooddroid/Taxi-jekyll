@@ -1,20 +1,39 @@
+# frozen_string_literal: true
+
 module Jekyll
   class Plugin
-    PRIORITIES = { :lowest => -100,
-                   :low => -10,
-                   :normal => 0,
-                   :high => 10,
-                   :highest => 100 }
+    PRIORITIES = {
+      :low     => -10,
+      :highest => 100,
+      :lowest  => -100,
+      :normal  => 0,
+      :high    => 10,
+    }.freeze
 
-    # Fetch all the subclasses of this class and its subclasses' subclasses.
     #
-    # Returns an array of descendant classes.
-    def self.descendants
-      descendants = []
-      ObjectSpace.each_object(singleton_class) do |k|
-        descendants.unshift k unless k == self
+
+    def self.inherited(const)
+      catch_inheritance(const) do |const_|
+        catch_inheritance(const_)
       end
-      descendants
+    end
+
+    #
+
+    def self.catch_inheritance(const)
+      const.define_singleton_method :inherited do |const_|
+        (@children ||= Set.new).add const_
+        yield const_ if block_given?
+      end
+    end
+
+    #
+
+    def self.descendants
+      @children ||= Set.new
+      out = @children.map(&:descendants)
+      out << self unless superclass == Plugin
+      Set.new(out).flatten
     end
 
     # Get or set the priority of this plugin. When called without an
@@ -27,9 +46,7 @@ module Jekyll
     # Returns the Symbol priority.
     def self.priority(priority = nil)
       @priority ||= nil
-      if priority && PRIORITIES.key?(priority)
-        @priority = priority
-      end
+      @priority = priority if priority && PRIORITIES.key?(priority)
       @priority || :normal
     end
 
@@ -41,9 +58,7 @@ module Jekyll
     #
     # Returns the safety Boolean.
     def self.safe(safe = nil)
-      if safe
-        @safe = safe
-      end
+      @safe = safe unless defined?(@safe) && safe.nil?
       @safe || false
     end
 
@@ -53,7 +68,7 @@ module Jekyll
     #
     # Returns -1, 0, 1.
     def self.<=>(other)
-      PRIORITIES[other.priority] <=> PRIORITIES[self.priority]
+      PRIORITIES[other.priority] <=> PRIORITIES[priority]
     end
 
     # Spaceship is priority [higher -> lower]

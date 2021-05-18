@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module Jekyll
   class Stevenson < ::Logger
     def initialize
@@ -5,18 +7,17 @@ module Jekyll
       @level = DEBUG
       @default_formatter = Formatter.new
       @logdev = $stdout
-      @formatter = proc do |severity, datetime, progname, msg|
-        "#{msg}"
+      @formatter = proc do |_, _, _, msg|
+        msg.to_s
       end
     end
 
-    def add(severity, message = nil, progname = nil, &block)
+    def add(severity, message = nil, progname = nil)
       severity ||= UNKNOWN
-      @logdev = set_logdevice(severity)
+      @logdev = logdevice(severity)
 
-      if @logdev.nil? or severity < @level
-        return true
-      end
+      return true if @logdev.nil? || severity < @level
+
       progname ||= @progname
       if message.nil?
         if block_given?
@@ -27,7 +28,8 @@ module Jekyll
         end
       end
       @logdev.puts(
-        format_message(format_severity(severity), Time.now, progname, message))
+        format_message(format_severity(severity), Time.now, progname, message)
+      )
       true
     end
 
@@ -47,7 +49,7 @@ module Jekyll
 
     private
 
-    def set_logdevice(severity)
+    def logdevice(severity)
       if severity > INFO
         $stderr
       else

@@ -1,55 +1,100 @@
-source 'https://rubygems.org'
-gemspec name: 'jekyll'
+# frozen_string_literal: true
 
-gem 'rake', '~> 10.1'
+source "https://rubygems.org"
+gemspec :name => "jekyll"
+
+gem "rake", "~> 13.0"
+
 group :development do
-  gem 'rdoc', '~> 4.2'
-  gem 'launchy', '~> 2.3'
-  gem 'toml', '~> 0.1.0'
-  gem 'pry'
+  gem "launchy", "~> 2.3"
+  gem "pry"
+
+  gem "pry-byebug" unless RUBY_ENGINE == "jruby"
 end
+
+#
 
 group :test do
-  gem 'redgreen', '~> 1.2'
-  gem 'shoulda', '~> 3.5'
-  gem 'cucumber', '~> 2.0', '< 2.1'
-  gem 'simplecov', '~> 0.9'
-  gem 'jekyll_test_plugin'
-  gem 'jekyll_test_plugin_malicious'
-  gem 'minitest-reporters'
-  gem 'minitest-profile'
-  gem 'minitest'
-  gem 'rspec-mocks'
+  gem "cucumber", RUBY_VERSION >= "2.5" ? "~> 5.1.2" : "~> 4.1"
+  gem "httpclient"
+  gem "jekyll_test_plugin"
+  gem "jekyll_test_plugin_malicious"
+  gem "memory_profiler"
+  gem "nokogiri", "~> 1.7"
+  gem "rspec"
+  gem "rspec-mocks"
+  gem "rubocop", "~> 1.12.0"
+  gem "rubocop-minitest"
+  gem "rubocop-performance"
+  gem "rubocop-rake"
+  gem "rubocop-rspec"
+  gem "test-dependency-theme", :path => File.expand_path("test/fixtures/test-dependency-theme", __dir__)
+  gem "test-theme", :path => File.expand_path("test/fixtures/test-theme", __dir__)
+  gem "test-theme-skinny", :path => File.expand_path("test/fixtures/test-theme-skinny", __dir__)
+  gem "test-theme-symlink", :path => File.expand_path("test/fixtures/test-theme-symlink", __dir__)
 
-  if RUBY_PLATFORM =~ /cygwin/ || RUBY_VERSION.start_with?("2.2")
-    gem 'test-unit'
-  end
-
-  if ENV['PROOF']
-    gem 'html-proofer', '~> 2.0'
-  end
+  gem "jruby-openssl" if RUBY_ENGINE == "jruby"
 end
+
+#
+
+group :test_legacy do
+  gem "test-unit" if RUBY_PLATFORM =~ %r!cygwin!
+
+  gem "minitest"
+  gem "minitest-profile"
+  gem "minitest-reporters"
+  gem "shoulda"
+  gem "simplecov"
+end
+
+#
 
 group :benchmark do
-  if ENV['BENCHMARK']
-    gem 'ruby-prof'
-    gem 'rbtrace'
-    gem 'stackprof'
-    gem 'benchmark-ips'
+  if ENV["BENCHMARK"]
+    gem "benchmark-ips"
+    gem "rbtrace"
+    gem "ruby-prof"
+    gem "stackprof"
   end
 end
 
-gem 'jekyll-paginate', '~> 1.0'
-gem 'jekyll-coffeescript', '~> 1.0'
-gem 'jekyll-feed'
-gem 'jekyll-gist', '~> 1.0'
-gem 'mime-types', '~> 2.6'
-gem 'kramdown', '~> 1.9'
+#
 
-platform :ruby, :mswin, :mingw do
-  gem 'rdiscount', '~> 2.0'
-  gem 'pygments.rb', '~> 0.6.0'
-  gem 'redcarpet', '~> 3.2', '>= 3.2.3'
-  gem 'classifier-reborn', '~> 2.0'
-  gem 'liquid-c', '~> 3.0'
+group :jekyll_optional_dependencies do
+  gem "jekyll-coffeescript"
+  gem "jekyll-docs", :path => "../docs" if Dir.exist?("../docs") && ENV["JEKYLL_VERSION"]
+  gem "jekyll-feed", "~> 0.9"
+  gem "jekyll-gist"
+  gem "jekyll-paginate"
+  gem "jekyll-redirect-from"
+  gem "kramdown-syntax-coderay"
+  gem "mime-types", "~> 3.0"
+  gem "rdoc", "~> 6.0"
+  gem "tomlrb"
+
+  platforms :ruby, :mswin, :mingw, :x64_mingw do
+    gem "classifier-reborn", "~> 2.2"
+    gem "liquid-c", "~> 4.0"
+    gem "yajl-ruby", "~> 1.4"
+  end
+
+  # Windows and JRuby does not include zoneinfo files, so bundle the tzinfo-data gem
+  # and associated library
+  platforms :jruby, :mswin, :mingw, :x64_mingw do
+    gem "tzinfo", "~> 1.2"
+    gem "tzinfo-data"
+  end
+end
+
+#
+
+group :site do
+  gem "html-proofer", "~> 3.4" if ENV["PROOF"]
+
+  gem "jekyll-avatar"
+  gem "jekyll-mentions"
+  gem "jekyll-seo-tag"
+  gem "jekyll-sitemap"
+  gem "jemoji"
 end

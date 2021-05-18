@@ -1,31 +1,30 @@
-# encoding: UTF-8
+# frozen_string_literal: true
 
 module Jekyll
   module Tags
-    class IncludeTagError < StandardError
-      attr_accessor :path
-
-      def initialize(msg, path)
-        super(msg)
-        @path = path
-      end
-    end
-
     class IncludeTag < Liquid::Tag
+      VALID_SYNTAX = %r!
+        ([\w-]+)\s*=\s*
+        (?:"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|([\w.-]+))
+      !x.freeze
+      VARIABLE_SYNTAX = %r!
+        (?<variable>[^{]*(\{\{\s*[\w\-.]+\s*(\|.*)?\}\}[^\s{}]*)+)
+        (?<params>.*)
+      !mx.freeze
 
-      attr_reader :includes_dir
-
-      VALID_SYNTAX = /([\w-]+)\s*=\s*(?:"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|([\w\.-]+))/
-      VARIABLE_SYNTAX = /(?<variable>[^{]*\{\{\s*(?<name>[\w\-\.]+)\s*(\|.*)?\}\}[^\s}]*)(?<params>.*)/
+      FULL_VALID_SYNTAX = %r!\A\s*(?:#{VALID_SYNTAX}(?=\s|\z)\s*)*\z!.freeze
+      VALID_FILENAME_CHARS = %r!^[\w/.\-()+~\#@]+$!.freeze
+      INVALID_SEQUENCES = %r![./]{2,}!.freeze
 
       def initialize(tag_name, markup, tokens)
         super
-        matched = markup.strip.match(VARIABLE_SYNTAX)
+        markup  = markup.strip
+        matched = markup.match(VARIABLE_SYNTAX)
         if matched
-          @file = matched['variable'].strip
-          @params = matched['params'].strip
+          @file = matched["variable"].strip
+          @params = matched["params"].strip
         else
-          @file, @params = markup.strip.split(' ', 2);
+          @file, @params = markup.split(%r!\s+!, 2)
         end
         validate_params if @params
         @tag_name = tag_name
@@ -37,52 +36,47 @@ module Jekyll
 
       def parse_params(context)
         params = {}
-        markup = @params
+        @params.scan(VALID_SYNTAX) do |key, d_quoted, s_quoted, variable|
+          value = if d_quoted
+                    d_quoted.include?('\\"') ? d_quoted.gsub('\\"', '"') : d_quoted
+                  elsif s_quoted
+                    s_quoted.include?("\\'") ? s_quoted.gsub("\\'", "'") : s_quoted
+                  elsif variable
+                    context[variable]
+                  end
 
-        while match = VALID_SYNTAX.match(markup) do
-          markup = markup[match.end(0)..-1]
-
-          value = if match[2]
-            match[2].gsub(/\\"/, '"')
-          elsif match[3]
-            match[3].gsub(/\\'/, "'")
-          elsif match[4]
-            context[match[4]]
-          end
-
-          params[match[1]] = value
+          params[key] = value
         end
         params
       end
 
       def validate_file_name(file)
-        if file !~ /^[a-zA-Z0-9_\/\.-]+$/ || file =~ /\.\// || file =~ /\/\./
-            raise ArgumentError.new <<-eos
-Invalid syntax for include tag. File contains invalid characters or sequences:
+        if INVALID_SEQUENCES.match?(file) || !VALID_FILENAME_CHARS.match?(file)
+          raise ArgumentError, <<~MSG
+            Invalid syntax for include tag. File contains invalid characters or sequences:
 
-  #{file}
+              #{file}
 
-Valid syntax:
+            Valid syntax:
 
-  #{syntax_example}
+              #{syntax_example}
 
-eos
+          MSG
         end
       end
 
       def validate_params
-        full_valid_syntax = Regexp.compile('\A\s*(?:' + VALID_SYNTAX.to_s + '(?=\s|\z)\s*)*\z')
-        unless @params =~ full_valid_syntax
-          raise ArgumentError.new <<-eos
-Invalid syntax for include tag:
+        unless FULL_VALID_SYNTAX.match?(@params)
+          raise ArgumentError, <<~MSG
+            Invalid syntax for include tag:
 
-  #{@params}
+            #{@params}
 
-Valid syntax:
+            Valid syntax:
 
-  #{syntax_example}
+            #{syntax_example}
 
-eos
+          MSG
         end
       end
 
@@ -93,44 +87,53 @@ eos
 
       # Render the variable if required
       def render_variable(context)
-        if @file.match(VARIABLE_SYNTAX)
-          partial = context.registers[:site].liquid_renderer.file("(variable)").parse(@file)
-          partial.render!(context)
-        end
+        Liquid::Template.parse(@file).render(context) if VARIABLE_SYNTAX.match?(@file)
       end
 
-      def tag_includes_dir(context)
-        context.registers[:site].config['includes_dir'].freeze
+      def tag_includes_dirs(context)
+        context.registers[:site].includes_load_paths.freeze
+      end
+
+      def locate_include_file(context, file, safe)
+        includes_dirs = tag_includes_dirs(context)
+        includes_dirs.each do |dir|
+          path = PathManager.join(dir, file)
+          return path if valid_include_file?(path, dir.to_s, safe)
+        end
+        raise IOError, could_not_locate_message(file, includes_dirs, safe)
       end
 
       def render(context)
         site = context.registers[:site]
-        @includes_dir = tag_includes_dir(context)
-        dir = resolved_includes_dir(context)
 
         file = render_variable(context) || @file
         validate_file_name(file)
 
-        path = File.join(dir, file)
-        validate_path(path, dir, site.safe)
+        path = locate_include_file(context, file, site.safe)
+        return unless path
 
-        # Add include to dependency tree
-        if context.registers[:page] and context.registers[:page].has_key? "path"
+        add_include_to_dependency(site, path, context)
+
+        partial = load_cached_partial(path, context)
+
+        context.stack do
+          context["include"] = parse_params(context) if @params
+          begin
+            partial.render!(context)
+          rescue Liquid::Error => e
+            e.template_name = path
+            e.markup_context = "included " if e.markup_context.nil?
+            raise e
+          end
+        end
+      end
+
+      def add_include_to_dependency(site, path, context)
+        if context.registers[:page]&.key?("path")
           site.regenerator.add_dependency(
             site.in_source_dir(context.registers[:page]["path"]),
             path
           )
-        end
-
-        begin
-          partial = load_cached_partial(path, context)
-
-          context.stack do
-            context['include'] = parse_params(context) if @params
-            partial.render!(context)
-          end
-        rescue => e
-          raise IncludeTagError.new e.message, File.join(@includes_dir, @file)
         end
       end
 
@@ -138,54 +141,130 @@ eos
         context.registers[:cached_partials] ||= {}
         cached_partial = context.registers[:cached_partials]
 
-        if cached_partial.has_key?(path)
+        if cached_partial.key?(path)
           cached_partial[path]
         else
-          cached_partial[path] = context.registers[:site].liquid_renderer.file(path).parse(read_file(path, context))
+          unparsed_file = context.registers[:site]
+            .liquid_renderer
+            .file(path)
+          begin
+            cached_partial[path] = unparsed_file.parse(read_file(path, context))
+          rescue Liquid::Error => e
+            e.template_name = path
+            e.markup_context = "included " if e.markup_context.nil?
+            raise e
+          end
         end
       end
 
-      def resolved_includes_dir(context)
-        context.registers[:site].in_source_dir(@includes_dir)
+      def valid_include_file?(path, dir, safe)
+        !outside_site_source?(path, dir, safe) && File.file?(path)
       end
 
-      def validate_path(path, dir, safe)
-        if safe && !realpath_prefixed_with?(path, dir)
-          raise IOError.new "The included file '#{path}' should exist and should not be a symlink"
-        elsif !File.exist?(path)
-          raise IOError.new "Included file '#{path_relative_to_source(dir, path)}' not found"
-        end
-      end
-
-      def path_relative_to_source(dir, path)
-        File.join(@includes_dir, path.sub(Regexp.new("^#{dir}"), ""))
+      def outside_site_source?(path, dir, safe)
+        safe && !realpath_prefixed_with?(path, dir)
       end
 
       def realpath_prefixed_with?(path, dir)
         File.exist?(path) && File.realpath(path).start_with?(dir)
+      rescue StandardError
+        false
       end
 
       # This method allows to modify the file content by inheriting from the class.
       def read_file(file, context)
-        File.read(file, file_read_opts(context))
+        File.read(file, **file_read_opts(context))
+      end
+
+      private
+
+      def could_not_locate_message(file, includes_dirs, safe)
+        message = "Could not locate the included file '#{file}' in any of "\
+          "#{includes_dirs}. Ensure it exists in one of those directories and"
+        message + if safe
+                    " is not a symlink as those are not allowed in safe mode."
+                  else
+                    ", if it is a symlink, does not point outside your site source."
+                  end
+      end
+    end
+
+    # Do not inherit from this class.
+    # TODO: Merge into the `Jekyll::Tags::IncludeTag` in v5.0
+    class OptimizedIncludeTag < IncludeTag
+      def render(context)
+        @site ||= context.registers[:site]
+
+        file = render_variable(context) || @file
+        validate_file_name(file)
+
+        @site.inclusions[file] ||= locate_include_file(file)
+        inclusion = @site.inclusions[file]
+
+        add_include_to_dependency(inclusion, context) if @site.config["incremental"]
+
+        context.stack do
+          context["include"] = parse_params(context) if @params
+          inclusion.render(context)
+        end
+      end
+
+      private
+
+      def locate_include_file(file)
+        @site.includes_load_paths.each do |dir|
+          path = PathManager.join(dir, file)
+          return Inclusion.new(@site, dir, file) if valid_include_file?(path, dir)
+        end
+        raise IOError, could_not_locate_message(file, @site.includes_load_paths, @site.safe)
+      end
+
+      def valid_include_file?(path, dir)
+        File.file?(path) && !outside_scope?(path, dir)
+      end
+
+      def outside_scope?(path, dir)
+        @site.safe && !realpath_prefixed_with?(path, dir)
+      end
+
+      def realpath_prefixed_with?(path, dir)
+        File.realpath(path).start_with?(dir)
+      rescue StandardError
+        false
+      end
+
+      def add_include_to_dependency(inclusion, context)
+        return unless context.registers[:page]&.key?("path")
+
+        @site.regenerator.add_dependency(
+          @site.in_source_dir(context.registers[:page]["path"]),
+          inclusion.path
+        )
       end
     end
 
     class IncludeRelativeTag < IncludeTag
-      def tag_includes_dir(context)
-        '.'.freeze
+      def tag_includes_dirs(context)
+        Array(page_path(context)).freeze
       end
 
       def page_path(context)
-        context.registers[:page].nil? ? includes_dir : File.dirname(context.registers[:page]["path"])
+        page, site = context.registers.values_at(:page, :site)
+        return site.source unless page
+
+        site.in_source_dir File.dirname(resource_path(page, site))
       end
 
-      def resolved_includes_dir(context)
-        context.registers[:site].in_source_dir(page_path(context))
+      private
+
+      def resource_path(page, site)
+        path = page["path"]
+        path = File.join(site.config["collections_dir"], path) if page["collection"]
+        path.sub(%r!/#excerpt\z!, "")
       end
     end
   end
 end
 
-Liquid::Template.register_tag('include', Jekyll::Tags::IncludeTag)
-Liquid::Template.register_tag('include_relative', Jekyll::Tags::IncludeRelativeTag)
+Liquid::Template.register_tag("include", Jekyll::Tags::OptimizedIncludeTag)
+Liquid::Template.register_tag("include_relative", Jekyll::Tags::IncludeRelativeTag)

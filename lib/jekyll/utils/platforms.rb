@@ -1,29 +1,66 @@
+# frozen_string_literal: true
+
 module Jekyll
   module Utils
-    module Platforms extend self
+    module Platforms
+      extend self
 
-      # Provides jruby? and mri? which respectively detect these two types of
-      # tested Engines we support, in the future we might probably support the
-      # other one that everyone used to talk about.
-
-      { :jruby? => "jruby", :mri? => "ruby" }.each do |k, v|
-        define_method k do
-          ::RUBY_ENGINE == v
-        end
+      def jruby?
+        RUBY_ENGINE == "jruby"
       end
 
-      # Provides windows?, linux?, osx?, unix? so that we can detect
-      # platforms. This is mostly useful for `jekyll doctor` and for testing
-      # where we kick off certain tests based on the platform.
+      def mri?
+        RUBY_ENGINE == "ruby"
+      end
 
-      { :windows? => /mswin|mingw|cygwin/, :linux? => /linux/, \
-          :osx? => /darwin|mac os/, :unix? => /solaris|bsd/ }.each do |k, v|
+      def windows?
+        vanilla_windows? || bash_on_windows?
+      end
 
-        define_method k do
-          !!(
-            RbConfig::CONFIG["host_os"] =~ v
-          )
-        end
+      # Not a Windows Subsystem for Linux (WSL)
+      def vanilla_windows?
+        rbconfig_host.match?(%r!mswin|mingw|cygwin!) && proc_version.empty?
+      end
+      alias_method :really_windows?, :vanilla_windows?
+
+      # Determine if Windows Subsystem for Linux (WSL)
+      def bash_on_windows?
+        linux_os? && microsoft_proc_version?
+      end
+
+      def linux?
+        linux_os? && !microsoft_proc_version?
+      end
+
+      def osx?
+        rbconfig_host.match?(%r!darwin|mac os!)
+      end
+
+      def unix?
+        rbconfig_host.match?(%r!solaris|bsd!)
+      end
+
+      private
+
+      def proc_version
+        @proc_version ||= \
+          begin
+            File.read("/proc/version").downcase
+          rescue Errno::ENOENT, Errno::EACCES
+            ""
+          end
+      end
+
+      def rbconfig_host
+        @rbconfig_host ||= RbConfig::CONFIG["host_os"].downcase
+      end
+
+      def linux_os?
+        rbconfig_host.include?("linux")
+      end
+
+      def microsoft_proc_version?
+        proc_version.include?("microsoft")
       end
     end
   end

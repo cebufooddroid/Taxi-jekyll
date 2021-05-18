@@ -24,7 +24,8 @@ Feature: Hooks
     end
     """
     When I run jekyll build
-    Then the _site directory should exist
+    Then I should get a zero exit status
+    And the _site directory should exist
     And I should see "mytinypage" in "_site/foo.html"
 
   Scenario: Modify the payload before rendering the site
@@ -37,7 +38,8 @@ Feature: Hooks
     end
     """
     When I run jekyll build
-    Then the _site directory should exist
+    Then I should get a zero exit status
+    And the _site directory should exist
     And I should see "myparam!" in "_site/index.html"
 
   Scenario: Modify the site contents after reading
@@ -51,7 +53,8 @@ Feature: Hooks
     end
     """
     When I run jekyll build
-    Then the _site directory should exist
+    Then I should get a zero exit status
+    And the _site directory should exist
     And the "_site/page1.html" file should not exist
     And I should see "page2" in "_site/page2.html"
 
@@ -67,7 +70,8 @@ Feature: Hooks
     """
     And I have a "page1.html" page that contains "page1"
     When I run jekyll build
-    Then the _site directory should exist
+    Then I should get a zero exit status
+    And the _site directory should exist
     And I should see "page1" in "_site/firstpage.html"
 
   Scenario: Alter a page right after it is initialized
@@ -81,7 +85,8 @@ Feature: Hooks
     """
     And I have a "page1.html" page that contains "page1"
     When I run jekyll build
-    Then the _site directory should exist
+    Then I should get a zero exit status
+    And the _site directory should exist
     And I should see "page1" in "_site/renamed.html"
 
   Scenario: Alter the payload for one page but not another
@@ -89,14 +94,35 @@ Feature: Hooks
     And I have a "_plugins/ext.rb" file with content:
     """
     Jekyll::Hooks.register :pages, :pre_render do |page, payload|
-      payload['myparam'] = 'special' if page.name == 'page1.html'
+      payload['page']['myparam'] = 'special' if page.name == 'page1.html'
     end
     """
-    And I have a "page1.html" page that contains "{{ myparam }}"
-    And I have a "page2.html" page that contains "{{ myparam }}"
+    And I have a "page1.html" page that contains "{{ page.myparam }}"
+    And I have a "page2.html" page that contains "{{ page.myparam }}"
     When I run jekyll build
     Then I should see "special" in "_site/page1.html"
     And I should not see "special" in "_site/page2.html"
+
+  Scenario: Modify the converted HTML content of a page before rendering layout
+    Given I have a _layouts directory
+    And I have a "_layouts/page.html" file with content:
+    """
+    <h3>Page heading</h3>
+    {{ content }}
+    """
+    And I have a "page.md" page with layout "page" that contains "### Heading"
+    And I have a _plugins directory
+    And I have a "_plugins/ext.rb" file with content:
+    """
+    Jekyll::Hooks.register :pages, :post_convert do |page|
+      page.content = page.content.gsub('h3', 'h4')
+    end
+    """
+    When I run jekyll build
+    Then I should get a zero exit status
+    And the _site directory should exist
+    And I should see "<h3>Page heading</h3>" in "_site/page.html"
+    And I should see "<h4 id=\"heading\">Heading</h4>" in "_site/page.html"
 
   Scenario: Modify page contents before writing to disk
     Given I have a _plugins directory
@@ -138,7 +164,8 @@ Feature: Hooks
       | title  | date       | layout | content               |
       | entry1 | 2015-03-14 | nil    | {{ page.harold }} |
     When I run jekyll build
-    Then the _site directory should exist
+    Then I should get a zero exit status
+    And the _site directory should exist
     And I should see "pbagrag sbe ragel1." in "_site/2015/03/14/entry1.html"
 
   Scenario: Alter the payload for certain posts
@@ -163,6 +190,34 @@ Feature: Hooks
     When I run jekyll build
     Then I should see "old post" in "_site/2015/03/14/entry1.html"
     And I should see "new post" in "_site/2015/03/15/entry2.html"
+
+  Scenario: Modify the converted HTML content of a post before rendering layout
+    Given I have a _layouts directory
+    And I have a "_layouts/post.html" file with content:
+    """
+    <h3>Page heading</h3>
+    {{ content }}
+    """
+    And I have a _posts directory
+    And I have a "_posts/2016-01-01-example.md" file with content:
+    """
+    ---
+    layout: post
+    ---
+    ### Heading
+    """
+    And I have a _plugins directory
+    And I have a "_plugins/ext.rb" file with content:
+    """
+    Jekyll::Hooks.register :posts, :post_convert do |post|
+      post.content = post.content.gsub('h3', 'h4')
+    end
+    """
+    When I run jekyll build
+    Then I should get a zero exit status
+    And the _site directory should exist
+    And I should see "<h3>Page heading</h3>" in "_site/2016/01/01/example.html"
+    And I should see "<h4 id=\"heading\">Heading</h4>" in "_site/2016/01/01/example.html"
 
   Scenario: Modify post contents before writing to disk
     Given I have a _plugins directory
@@ -229,7 +284,7 @@ Feature: Hooks
       owner.output = "1 #{owner.output.chomp}"
     end
     Jekyll::Hooks.register :pages, :post_render, priority: :high do |owner|
-      # high runs last
+      # high runs first
       owner.output = "2 #{owner.output.chomp}"
     end
     Jekyll::Hooks.register :pages, :post_render do |owner|
@@ -237,13 +292,13 @@ Feature: Hooks
       owner.output = "3 #{owner.output.chomp}"
     end
     Jekyll::Hooks.register :pages, :post_render, priority: :low do |owner|
-      # low runs first
+      # low runs last
       owner.output = "4 #{owner.output.chomp}"
     end
     """
     And I have a "index.html" page that contains "WRAP ME"
     When I run jekyll build
-    Then I should see "2 3 1 4 WRAP ME" in "_site/index.html"
+    Then I should see "4 3 1 2 WRAP ME" in "_site/index.html"
 
   Scenario: Alter a document right after it is initialized
     Given I have a _plugins directory
@@ -268,8 +323,89 @@ Feature: Hooks
     {{ site.memes.first.text }}
     """
     When I run jekyll build
-    Then the _site directory should exist
+    Then I should get a zero exit status
+    And the _site directory should exist
     And I should see "all your base are belong to us" in "_site/index.html"
+
+  Scenario: Modify the converted HTML content of a document before rendering layout
+    Given I have a _layouts directory
+    And I have a "_layouts/meme.html" file with content:
+    """
+    <h3>Page heading</h3>
+    {{ content }}
+    """
+    And I have a "_config.yml" file with content:
+    """
+    collections:
+      memes:
+        output: true
+    """
+    And I have a _memes directory
+    And I have a "_memes/doc1.md" file with content:
+    """
+    ---
+    layout: meme
+    text: all your base
+    ---
+    ### {{ page.text }}
+    """
+    And I have a _plugins directory
+    And I have a "_plugins/ext.rb" file with content:
+    """
+    Jekyll::Hooks.register :documents, :post_convert do |document|
+      document.content = document.content.gsub('h3', 'h4')
+    end
+    """
+    When I run jekyll build
+    Then I should get a zero exit status
+    And the _site directory should exist
+    And I should see "<h3>Page heading</h3>" in "_site/memes/doc1.html"
+    And I should see "<h4 id=\"all-your-base\">all your base</h4>" in "_site/memes/doc1.html"
+
+  Scenario: Modify the converted HTML content of document of a particular collection before rendering layout
+    Given I have a _layouts directory
+    And I have a "_layouts/meme.html" file with content:
+    """
+    <h3>Page heading</h3>
+    {{ content }}
+    """
+    And I have a "_config.yml" file with content:
+    """
+    collections:
+      memes:
+        output: true
+    """
+    And I have a _memes directory
+    And I have a "_memes/doc1.md" file with content:
+    """
+    ---
+    layout: meme
+    text: all your base
+    ---
+    ### {{ page.text }}
+    """
+    And I have a _posts directory
+    And I have a "_posts/2016-01-01-example.md" file with content:
+    """
+    ---
+    layout: meme
+    text: all your base
+    ---
+    ### {{ page.text }}
+    """
+    And I have a _plugins directory
+    And I have a "_plugins/ext.rb" file with content:
+    """
+    Jekyll::Hooks.register :memes, :post_convert do |document|
+      document.content = document.content.gsub('h3', 'h4')
+    end
+    """
+    When I run jekyll build
+    Then I should get a zero exit status
+    And the _site directory should exist
+    And I should see "<h3>Page heading</h3>" in "_site/memes/doc1.html"
+    And I should see "<h4 id=\"all-your-base\">all your base</h4>" in "_site/memes/doc1.html"
+    But I should see "<h3 id=\"all-your-base\">all your base</h3>" in "_site/2016/01/01/example.html"
 
   Scenario: Update a document after rendering it, but before writing it to disk
     Given I have a _plugins directory
@@ -294,7 +430,8 @@ Feature: Hooks
     {{ page.text }}
     """
     When I run jekyll build
-    Then the _site directory should exist
+    Then I should get a zero exit status
+    And the _site directory should exist
     And I should see "<p class=\"meme\">all your base are belong to us" in "_site/memes/doc1.html"
 
   Scenario: Perform an action after every document is written
@@ -322,5 +459,31 @@ Feature: Hooks
     {{ page.text }}
     """
     When I run jekyll build
-    Then the _site directory should exist
+    Then I should get a zero exit status
+    And the _site directory should exist
     And I should see "Wrote document 0" in "_site/document-build.log"
+
+  Scenario: Set a custom payload['page'] property
+    Given I have a _plugins directory
+    And I have a "_plugins/ext.rb" file with content:
+    """
+    Jekyll::Hooks.register :pages, :pre_render do |page, payload|
+        payload['page']['foo'] = "hello world"
+    end
+    """
+    And I have a _layouts directory
+    And I have a "_layouts/custom.html" file with content:
+      """
+      ---
+      ---
+      {{ content }} {% include foo.html %}
+      """
+    And I have a _includes directory
+    And I have a "_includes/foo.html" file with content:
+      """
+      {{page.foo}}
+      """
+    And I have an "index.html" page with layout "custom" that contains "page content"
+    When I run jekyll build
+    Then the "_site/index.html" file should exist
+    And I should see "page content\n hello world" in "_site/index.html"
